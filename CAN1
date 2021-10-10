@@ -1,0 +1,230 @@
+/*   CAN1.H   */
+#ifndef CAN1_H
+#define	CAN1_H
+#include <xc.h> 
+#include "stdbool.h"
+
+#ifdef	__cplusplus
+extern "C" {
+#endif /* __cplusplus */
+ 
+typedef unsigned long  CANFD_MSG_TIMESTAMP;
+
+/* CANFD Message ID*/
+typedef struct _CANFD_MSGOBJ_ID {
+unsigned SID:11;
+unsigned long EID:18;
+unsigned SID11:1;
+unsigned unimplemented1:2;
+} CANFD_MSGOBJ_ID;
+
+typedef struct _CANFD_TX_MSGOBJ_CTRL
+{
+unsigned DLC:4;
+unsigned IDE:1;
+unsigned RTR:1;
+unsigned BRS:1;
+unsigned FDF:1;
+unsigned ESI:1;
+unsigned unimplemented1:16;
+} CANFD_TX_MSGOBJ_CTRL;
+
+typedef union _CANFD_TX_MSGOBJ {
+struct {
+CANFD_MSGOBJ_ID id;
+CANFD_TX_MSGOBJ_CTRL ctrl;
+CANFD_MSG_TIMESTAMP timeStamp;
+} bF;
+unsigned int word[4];
+unsigned char byte[8];
+} CANFD_TX_MSGOBJ;
+
+typedef struct _CANFD_RX_MSGOBJ_CTRL {
+unsigned DLC:4;
+unsigned IDE:1;
+unsigned RTR:1;
+unsigned BRS:1;
+unsigned FDF:1;
+unsigned ESI:1;
+unsigned unimplemented1:2;
+unsigned FilterHit:5;
+unsigned unimplemented2:16;
+} CANFD_RX_MSGOBJ_CTRL;
+
+/* CANFD RX Message Object */
+typedef union _CANFD_RX_MSGOBJ {
+struct {
+CANFD_MSGOBJ_ID id;
+CANFD_RX_MSGOBJ_CTRL ctrl;
+CANFD_MSG_TIMESTAMP timeStamp;
+} bF;
+unsigned int word[4];
+unsigned char byte[8];
+} CANFD_RX_MSGOBJ;
+
+
+
+void CAN1_Init(uint16_t fltID_pass);
+bool CAN1_TransmitMessage(uint16_t msgSID, uint8_t DLC, uint8_t* msgbuff);
+bool CAN1_ReceiveMessage(int* msgSID, uint8_t* datalen, uint8_t* msgbuff);
+
+
+
+#ifdef	__cplusplus
+}
+#endif /* __cplusplus */
+
+#endif	/* CAN1_H */
+/*  CAN1.C  */
+/*
+ * File:   CAN1.c
+ */
+#include "CAN1.h"
+
+#define MAX_WORDS 200
+unsigned int __attribute__((aligned(4))) CanBuffer[MAX_WORDS];
+
+CANFD_TX_MSGOBJ *txObj;
+CANFD_RX_MSGOBJ *rxObj;
+
+void CAN1_Init(uint16_t fltID_pass)
+{
+    C1CONL = 0x0000;
+    Nop(); Nop();
+    C1CONLbits.CON = 1;   // Enable CAN1 FD module
+    
+    C1CONHbits.REQOP = 4;
+    while(C1CONHbits.OPMOD != 4);
+    
+    /* Initialize the C1FIFOBA with the start address of the CAN FIFO message buffer area. */
+    C1FIFOBAL = (unsigned int) &CanBuffer;     // define Transmit FIFO base address
+    
+    C1CONLbits.SIDL = 0; /* Continue in idle */  
+    CANCLKCON = 0x0000;   // Reset
+    /* Current FVCO = 1200MHz  */
+    /* CAN clock set up */
+    CANCLKCONbits.CANCLKSEL = 0b0100; /* Clock Source is FVCO/3 = 400MHz */
+    CANCLKCONbits.CANCLKDIV = 4; /* Divide FVCO by 5, CAN clock = 80MHZ */ 
+    C1CONLbits.CLKSEL = 0; /* Clock from the CAN clock generator active when module enabled */    
+    CANCLKCONbits.CANCLKEN = 0x1; //Enable CAN clock generator
+
+    /* Nominal bit rate configuration */
+    C1NBTCFGHbits.BRP = 0; /* Define Nominal Tq: Ntq = NBRP / FSysClk.
+    ** NBRP = 1 system clock defined above = 80Mhz therefore NTQ = 12.5ns */
+
+    C1CONLbits.DNCNT = 0b00000;
+    C1CONLbits.WAKFIL = 0; /* CAN bus line filter is not used for wake up */
+    C1CONLbits.BRSDIS = 0; /* Bit rate switching depends on BRS in transmit message object */
+   /* following configuration for 500k/2M (Norminal Bit & Data Bit Rate */
+    C1NBTCFGHbits.TSEG1 = 126;     /* Time segment 1 = 127Tq */
+    C1NBTCFGLbits.TSEG2 = 31; /* Time segment 2 = 32Tq. This combination provides 80% NSP */
+    C1NBTCFGLbits.SJW = 31; /* Maximising NSJW lessens the requirement for the oscillator tolerance SJW = 32Tq */ 
+    
+        /* Data bit rate configuration */
+    C1DBTCFGHbits.BRP = 0; /* Define Data Tq: Dtq = DBRP / FSysClk
+    ** Identical Tq in both phases prevents quantisation errors in bit rate switching */ 
+    C1DBTCFGHbits.TSEG1 = 30; /* Time segment 1 = 31 Tq */
+    C1DBTCFGLbits.TSEG2 = 7; /* Time segment 2 = 8 Tq. This combination provides 80% DSP */
+    C1DBTCFGLbits.SJW = 7; /* Synchronisation jump width bits = 8Tq */ 
+   
+    C1TDCHbits.TDCMOD = 0b10; /* Auto mode: measures delay and adds Tseg, adds TDCO */
+    C1TDCLbits.TDCO = 31; /* Transmitter delay compensation = 31 * Tcy */
+    C1TDCLbits.TDCV = 0; /* Transmitter delay compensation value bits = 0* Fp */    
+    
+//    /* Configure CANFD module to enable Transmit Queue and BRS*/
+//    C1CONLbits.BRSDIS = 0x0;
+//    C1CONHbits.STEF = 0x0;  //Don't save transmitted messages in TEF
+//    C1CONHbits.TXQEN = 0x1;  // enable TXQ 
+    
+    /* Message memory configuration for Tx buffer */
+    C1FIFOCON1Hbits.PLSIZE = 0; /* 8 bytes of payload, normal frame */
+    C1FIFOCON1Hbits.FSIZE = 1;  /* FIFO is 1 messages deep */
+    C1FIFOCON1Hbits.TXPRI = 1;  /* transmit priority, 0 - 31 value, low --> high */
+    C1FIFOCON1Hbits.TXAT = 2;   /* unlimited retransmitt attemp */
+    C1FIFOCON1Lbits.TXEN = 1;  /* Configure FIFO1 as a transmit FIFO */  
+    
+    /* configure FIFO2 & FIFO3 for receive FIFOS */
+    C1FIFOCON2L = 0; C1FIFOCON2H = 0;    // FIFO 2 for reception
+    C1FIFOCON3L = 0; C1FIFOCON3H = 0;    // FIFO 3 for reception
+    C1FLTCON0L = 0;  C1FLTCON0H  = 0;    // FLT0 & FLT1 for FIFO2 & FIFO 3 filtering
+    C1FLTCON1L = 0;  C1FLTCON1H  = 0;
+    /* Configure FIFO2 to Receive 2 messages*/
+    C1FIFOCON2Hbits.FSIZE = 0x1;     //2 messages
+    C1FIFOCON2Hbits.PLSIZE = 0;      // 8 data bytes of payload
+    C1FIFOCON2Lbits.TXEN = 0x0;      //Receive fifo
+   // C1FIFOCON2Lbits.TFNRFNIE = 1;     // enable RX not empty interrupt
+    
+    /* Configure filter 0 and MASK 0 to accept extended id messages with id = 0 - F */
+    C1FLTCON0Lbits.F0BP = 2; // message stored in FIFO2
+    C1FLTOBJ0L = fltID_pass & 0x7FF;  //
+    C1FLTOBJ0H = 0x0000; // Match messages only with standard SID
+    C1MASK0L = 0x7C0;  // allow 0 - 63 lower ID receive,64 node maximum, 0111,1100,0000 
+    C1MASK0H = 0x3FFF; // Match either standard ID or extended ID
+    C1FLTCON0Lbits.FLTEN0 = 1; // Enable the filter 0    
+    
+   /* Place the CAN module in Normal mode. */
+    C1CONHbits.REQOP = 0b110;
+    while(C1CONHbits.OPMOD != 0b110);   
+    
+}
+
+bool CAN1_TransmitMessage(uint16_t msgSID, uint8_t DLC, uint8_t* msgbuff)
+{ 
+    uint8_t index;
+  if(C1FIFOSTA1bits.TFNRFNIF == 1) 
+ {
+    txObj = (CANFD_TX_MSGOBJ *)C1FIFOUA1L;
+    txObj->bF.id.SID = msgSID & 0x7FF;
+    txObj->bF.id.EID = 0x0000;
+    txObj->bF.ctrl.BRS = 0 ; //using NBR bit rate, BRS=1, switching to high bitrate of DBR
+
+    if(DLC > 8) DLC = 8;
+      txObj->bF.ctrl.DLC = DLC; //8 bytes
+      txObj->bF.ctrl.FDF = 0; // FDF=0: standard CAN2.0, FDF=1: CAN FD frame
+      txObj->bF.ctrl.IDE = 0; //Standard frame
+    for (index=0;index<8;index++ )
+    {
+      txObj->byte[index+8] = msgbuff[index] ; 
+    }
+    C1FIFOCON1Lbits.UINC = 1;    // UINC must set to 1
+    C1FIFOCON1Lbits.TXREQ = 1;   // request FIFO1 to transmitt    
+    return true;
+}
+  else
+      return false;
+}
+
+bool CAN1_ReceiveMessage(int* msgSID, uint8_t* datalen, uint8_t* msgbuff)
+{
+   /* Get the address of the message buffer to read the received messages.*/
+/* set UINC bit to update the FIFO tail */
+
+   uint16_t tempAddr;
+   uint16_t pos;
+   
+   if(C1FIFOSTA2bits.TFNRFNIF == 0)       
+       {   return false;  }
+   else
+   {
+       rxObj = (CANFD_RX_MSGOBJ *)C1FIFOUA2L; 
+       tempAddr = rxObj->bF.id.SID &0x07FF;
+  //     if ( msgSID == tempAddress )
+  //     {
+       *msgSID = tempAddr;       
+       *datalen = rxObj->bF.ctrl.DLC;
+       
+           if(rxObj->bF.ctrl.DLC > 0)
+           {
+               pos = 0;
+               while( pos < rxObj->bF.ctrl.DLC)
+               {
+                   *msgbuff++ =  rxObj->byte[8 + pos++];
+               }
+           }
+    // Process the received messages
+    C1FIFOCON2Lbits.UINC = 1; // Update the FIFO message pointer.    
+    return true;
+   }
+   
+}
+
