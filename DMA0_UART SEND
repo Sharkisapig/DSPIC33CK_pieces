@@ -1,0 +1,127 @@
+uint8_t com1_TxBuff[255];
+
+ /*   UART1 operation code written by YYF  */
+ void DebugCom1_Init( uint32_t baudrate)
+ {
+
+     _U1RXIE = 0; 
+     _U1RXIF = 0;
+     _U1TXIE = 0;
+     _U1TXIF = 0;     
+     
+     // config UART1 as normal 8bit uart, 1 stop bit,no parity, UBRG / 16 mode, TX,RX enabled
+    U1MODE = 0x0000;
+
+    /*  Initialize UARTx Configuration Register High */
+    U1MODEH =  0x0000;
+    /*  Initialize UARTx Status Register */
+    U1STA = 0x0000;
+    /*  Initialize UARTx Status High Register */
+    U1STAH = 0;
+  //      111 = Sets TX interrupt when there is 1 empty slot left in the buffer
+  //      000 = Sets TX interrupt when there is 8 empty slot left in the buffer
+    U1STAHbits.UTXISEL = 0;     // UTXISEL must be 0 if DMA transfer be used
+   //     000 = Triggers RX interrupt when there is 1 word or more in the buffer*/
+    U1STAHbits.URXISEL = 0;
+    U1STAHbits.UTXBE = 1;     // clear TX buffers  before TXEN=1
+    U1STAHbits.URXBE = 1;    // clear RX buffers  before RXEN = 1
+    U1STAHbits.URXBF = 0;
+    Nop(); Nop();
+    
+    /*  Initialize UARTx Baud Rate Register bits<15:0> =  BRG<15:0>  */
+    U1BRG =  (uint16_t)(FCY/(16.0*baudrate)) - 1;       // legacy /16 low speed baudrate clock
+    /*  Initialize UARTx Baud Rate High Register bits<3:0> =  BRG<19:16> */
+    U1BRGH = 0;    
+
+    U1RXREG = 0;
+    U1TXREG =  0;
+    
+    // default initialize to 0 registers 
+    /*  Initialize UARTx Timing Parameter 1 Register */
+    U1P1 = 0;
+    /*  Initialize UARTx Timing Parameter 2 Register */
+    U1P2 = 0;
+    /*  Initialize UARTx Timing Parameter 2 Register */
+    U1P3 = 0;
+    /*  Initialize UARTx Timing Parameter 3 Register High */
+    U1P3H = 0;
+    /*  Initialize UARTx Transmit Checksum Register */
+    U1TXCHK = 0;
+    /*  Initialize UARTx Receive Checksum Register */
+    U1RXCHK = 0;
+    /*  Initialize UARTx Smart Card Configuration High Register */
+    U1SCCON = 0;
+    /*  Initialize UxSCINT: UARTx Smart Card Interrupt Register */
+    U1SCINT =  0;
+    
+    U1MODEbits.UARTEN = 1;        // turn on UART1 module
+    Nop(); Nop();
+    U1MODEbits.UTXEN = 1;
+    U1MODEbits.URXEN = 1;    
+
+     
+ }
+ 
+ // ***************  DMA0 allocate for UART1 TX DMA *************//
+ void DMA0_Config()
+ {
+    DMACON = 0x0000;
+    DMACH0 = 0x0000;
+    
+    DMACONbits.DMAEN    =   1;                      /* Enable the DMA controller    */
+    DMACONbits.PRSSEL   =   0;                      /* Fixed priority scheme   */
+   
+    DMACH0bits.CHEN     =   0;                   /* disable DMACH0 first */
+    DMACH0bits.NULLW    =   0;                 /* no dummy write */      
+    DMACH0bits.RELOAD   =   0;                /*  no reload  */       
+    DMACH0bits.SAMODE   =   0b01;         // memory increament mode             
+    DMACH0bits.DAMODE   =   0b11;        // UART port in peripheral indirect mode            
+    DMACH0bits.TRMODE   =   0b00;         // one-shot transfer mode         
+    DMACH0bits.SIZE     =   1;                   // byte size transferr           
+    
+    DMAINT0 = 0x0000;
+    DMAINT0bits.CHSEL   =   0x05;          // uart1 tx trigger       
+    
+    DMAH    =   0x5000;       // X-RAM High end
+    DMAL    =   0x1000;       // X-RAM Low end        
+    
+    DMASRC0 =   (volatile unsigned int) &com1_TxBuff[0] ;         // must be unsigned int type                  
+    DMADST0 =   (volatile unsigned int) &U1TXREG;                 
+    DMACNT0 =  64;      // no matter here                                                                  
+    
+    IPC1bits.DMA0IP = 3; 
+    IFS0bits.DMA0IF     =   0;                      /* Ensure DMA0 interrupt flat is cleared   */
+    IEC0bits.DMA0IE     =   1;                      /* Set the DMA0 interrupt bit */     
+
+ }
+ 
+ 
+ void Com1_DMA0Send(uint8_t*  txbuff, uint8_t bufflen)
+ {
+     volatile uint8_t  pos, len;
+     if(bufflen >  255)  
+         bufflen = 255;    
+     
+      IFS0bits.DMA0IF     =   0;
+     
+     memcpy(com1_TxBuff,txbuff,bufflen*sizeof(uint8_t));
+     
+     DMASRC0 =   (volatile unsigned int) &com1_TxBuff[0] ;       
+     DMACNT0 = bufflen;
+     DMACH0bits.CHEN     =   1;      
+     DMACH0bits.CHREQ =  1;
+   
+ }
+ 
+ /*     DMA0 configured for UART1 TX, Interrupt indicate transmit completed    */
+void __attribute__((interrupt, no_auto_psv)) _DMA0Interrupt(void) 
+{
+    DMACH0bits.CHEN     =   0;      
+    DMACH0bits.CHREQ =  0;
+    
+    DMAINT0bits.OVRUNIF = 0;
+    DMAINT0bits.LOWIF   = 0;
+    DMAINT0bits.HIGHIF  = 0;
+    _DMA0IF =   0;      /* Clear DMA0 interrupt flag   */
+}
+ 
